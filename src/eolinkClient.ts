@@ -20,20 +20,42 @@ import {
   resolveProxy,
 } from "./constants.js";
 
+/** 超时/连接类错误的重试次数（不含首次），应对代理间歇性抖动 */
+const RETRY_TIMES = 2;
+
+function isRetryable(error: unknown): boolean {
+  if (error instanceof AxiosError) {
+    return (
+      error.code === "ECONNABORTED" ||
+      error.code === "ETIMEDOUT" ||
+      error.code === "ECONNRESET" ||
+      error.code === "ENOTFOUND" ||
+      error.code === "ECONNREFUSED"
+    );
+  }
+  return false;
+}
+
 /**
  * 发起一次 Eolink Open API 调用。
  * @param path        接口路径，如 "v2/api_studio/management/api/search"
  * @param projectId   项目 ID（除 project/search 外都必传）
  * @param extra       额外的 Body 字段（与 space_id/project_id 合并）
  * @param noProject   某些接口（如 project/search）不需要 project_id，置 true 跳过
+ * @param write       写操作（create/update）置 true：URL 加 /index.php/ 前缀
+ *                    （Eolink 写接口必须经 index.php 入口，读接口不需要）
  */
 export async function eolinkRequest<T = unknown>(
   path: string,
   projectId: string | undefined,
   extra: Record<string, unknown> = {},
-  noProject = false
+  noProject = false,
+  write = false
 ): Promise<T> {
-  const url = `${API_BASE_URL}/${path.replace(/^\//, "")}`;
+  const cleanPath = path.replace(/^\//, "");
+  // 写操作需要 /index.php/ 前缀，读操作直接 /path
+  const prefix = write ? "index.php/" : "";
+  const url = `${API_BASE_URL}/${prefix}${cleanPath}`;
   const body: Record<string, unknown> = { space_id: SPACE_ID, ...extra };
   if (!noProject) {
     if (!projectId || !projectId.trim()) {
@@ -47,25 +69,33 @@ export async function eolinkRequest<T = unknown>(
   const proxyConfig: AxiosProxyConfig | false = proxy
     ? { host: proxy.host, port: proxy.port, protocol: "http" }
     : false;
-  try {
-    const resp = await axios.request<T>({
-      method: "POST",
-      url,
-      data: body,
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "Eo-Secret-Key": EO_SECRET_KEY,
-      },
-      proxy: proxyConfig,
-      maxRedirects: 0,
-      validateStatus: (s) => s < 400 || s === 302,
-    });
-    return resp.data;
-  } catch (error) {
-    throw new Error(formatAxiosError(error, path));
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRY_TIMES; attempt++) {
+    try {
+      const resp = await axios.request<T>({
+        method: "POST",
+        url,
+        data: body,
+        timeout: REQUEST_TIMEOUT,
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Eo-Secret-Key": EO_SECRET_KEY,
+        },
+        proxy: proxyConfig,
+        maxRedirects: 0,
+        validateStatus: (s) => s < 400 || s === 302,
+      });
+      return resp.data;
+    } catch (error) {
+      lastError = error;
+      // 仅对超时/连接类错误重试；HTTP 4xx/5xx 业务错误不重试
+      if (!isRetryable(error) || attempt === RETRY_TIMES) break;
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
   }
+  throw new Error(formatAxiosError(lastError, path));
 }
 
 /** 把 axios 错误转成对 agent 友好的可操作提示 */

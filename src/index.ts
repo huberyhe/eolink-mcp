@@ -378,6 +378,200 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// 工具 7 & 8：新增 / 修改接口（共用 schema，差异在 api_id 是否必填）
+// ---------------------------------------------------------------------------
+
+/** 单个参数的 Zod 片段（query/body/restful 通用） */
+const ParamItemSchema = z
+  .object({
+    param_key: z.string().describe("参数名，如 limit"),
+    param_name: z.string().optional().describe("参数说明/中文名"),
+    param_type: z
+      .string()
+      .describe("参数类型数字：0=string 1=file 2=json 3=int 4=float 6=date 7=datetime 8=boolean"),
+    param_not_null: z
+      .enum(["0", "1"])
+      .default("0")
+      .describe("是否必填：1=是 0=否"),
+    param_value: z.string().optional().describe("参数示例值"),
+    param_note: z.string().optional().describe("备注"),
+  })
+  .strict();
+
+/** 写接口的请求/响应参数项（不含 project_id，由各工具 extend 加入） */
+const ApiWriteFields = {
+  api_name: z.string().min(1).describe("接口名称"),
+  api_url: z.string().min(1).describe("接口 URL，如 user/user/list"),
+  group_id: z.number().int().describe("分组 ID（先用 eolink_list_groups 获取）"),
+  api_request_type: z
+    .enum(["get", "post", "put", "delete", "patch", "head", "options"])
+    .describe("请求方法"),
+  api_protocol: z.enum(["http", "https"]).default("http").describe("请求协议"),
+  api_status: z
+    .enum(["enable", "disable"])
+    .default("enable")
+    .describe("接口状态：enable=已启用 disable=已禁用"),
+  api_success_mock: z.string().optional().describe("成功响应示例（JSON 字符串）"),
+  api_failure_mock: z.string().optional().describe("失败响应示例（JSON 字符串）"),
+  api_url_param: z
+    .array(ParamItemSchema)
+    .optional()
+    .describe("Query 参数列表"),
+  api_request_param: z
+    .array(ParamItemSchema)
+    .optional()
+    .describe("请求体参数列表"),
+  api_restful_param: z
+    .array(ParamItemSchema)
+    .optional()
+    .describe("Restful 路径参数列表"),
+  api_note: z.string().optional().describe("接口详细说明（markdown）"),
+};
+
+/** 把工具参数组装成 Eolink create_or_update_http_api 的 body */
+function buildWriteBody(params: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    api_name: params.api_name,
+    api_url: params.api_url,
+    group_id: params.group_id,
+    api_request_type: params.api_request_type,
+    api_protocol: params.api_protocol,
+    api_status: params.api_status,
+  };
+  if (params.api_success_mock !== undefined) body.api_success_mock = params.api_success_mock;
+  if (params.api_failure_mock !== undefined) body.api_failure_mock = params.api_failure_mock;
+  if (params.api_url_param !== undefined) body.api_url_param = params.api_url_param;
+  if (params.api_request_param !== undefined) body.api_request_param = params.api_request_param;
+  if (params.api_restful_param !== undefined) body.api_restful_param = params.api_restful_param;
+  if (params.api_note !== undefined) body.api_note = params.api_note;
+  return body;
+}
+
+// ---- 工具 7：新增接口 ----
+const CreateApiSchema = z
+  .object({ project_id: projectIdRequired, ...ApiWriteFields })
+  .strict();
+
+server.registerTool(
+  "eolink_create_api",
+  {
+    title: "新增 Eolink 接口",
+    description: `在指定项目里新增一个 HTTP 接口文档（调用 create_or_update_http_api，不传 api_id）。
+
+⚠️ 写操作：会直接在 Eolink 项目里创建新接口。
+
+参数：
+  - project_id：项目 ID（必填）
+  - api_name：接口名称（必填）
+  - api_url：接口 URL（必填）
+  - group_id：分组 ID（必填，先用 eolink_list_groups 获取）
+  - api_request_type：请求方法 get/post/put/delete/patch 等（必填）
+  - api_protocol：http 或 https（默认 http）
+  - api_status：enable/disable（默认 enable）
+  - api_url_param：Query 参数列表（可选）
+  - api_request_param：请求体参数列表（可选）
+  - api_restful_param：Restful 路径参数列表（可选）
+  - api_success_mock / api_failure_mock：响应示例（可选）
+  - api_note：接口说明 markdown（可选）
+
+参数类型 param_type 用数字：0=string 3=int 2=json 8=boolean 等。
+返回新接口的 api_id。`,
+    inputSchema: CreateApiSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async (params) => {
+    const body = buildWriteBody(params);
+    const resp = await eolinkRequest<{ status: string; data?: Record<string, unknown> }>(
+      "v2/api_studio/management/api/create_or_update_http_api",
+      params.project_id,
+      body,
+      false,
+      true
+    );
+    if (!isOk(resp)) {
+      return errText("新增接口失败", resp);
+    }
+    const apiId = resp.data?.apiID ?? resp.data?.api_id;
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ 已新增接口：${params.api_name}\n  api_id: ${apiId ?? "(未返回)"}\n  URL: ${params.api_protocol}://${params.api_url}\n  分组: ${params.group_id}\n用 eolink_get_api_detail 查看完整定义。`,
+        },
+      ],
+      structuredContent: { api_id: apiId, api_name: params.api_name, data: resp.data },
+    };
+  }
+);
+
+// ---- 工具 8：修改接口 ----
+const UpdateApiSchema = z
+  .object({
+    project_id: projectIdRequired,
+    api_id: z
+      .number()
+      .int()
+      .describe("要修改的接口 ID（先用 eolink_search_apis 或 find_api_by_path 获取）"),
+    ...ApiWriteFields,
+  })
+  .strict();
+
+server.registerTool(
+  "eolink_update_api",
+  {
+    title: "修改 Eolink 接口",
+    description: `修改指定项目里一个已存在的 HTTP 接口（调用 create_or_update_http_api，传 api_id）。
+
+⚠️ 写操作：会直接改动 Eolink 里已有的接口文档。建议先用 eolink_get_api_detail 确认当前内容再改。
+
+参数：
+  - project_id：项目 ID（必填）
+  - api_id：要修改的接口 ID（必填）
+  - 其余字段同 eolink_create_api（api_name/api_url/group_id/请求方法/参数等）
+
+注意：传哪些字段就改哪些字段，未传的字段保持原值？—— 实际 Eolink 对未传字段的处理依实现而定，
+建议修改前先 get_api_detail 拿到完整内容，再把要保留的字段一并传入。
+
+返回更新后的接口信息。`,
+    inputSchema: UpdateApiSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  async (params) => {
+    const body = buildWriteBody(params);
+    body.api_id = params.api_id;
+    const resp = await eolinkRequest<{ status: string; data?: Record<string, unknown> }>(
+      "v2/api_studio/management/api/create_or_update_http_api",
+      params.project_id,
+      body,
+      false,
+      true
+    );
+    if (!isOk(resp)) {
+      return errText("修改接口失败", resp);
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ 已修改接口 api_id=${params.api_id}：${params.api_name}\n  URL: ${params.api_protocol}://${params.api_url}\n用 eolink_get_api_detail 查看修改后的完整定义。`,
+        },
+      ],
+      structuredContent: { api_id: params.api_id, data: resp.data },
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
 // 渲染辅助函数
 // ---------------------------------------------------------------------------
 function errText(action: string, resp: unknown): { content: [{ type: "text"; text: string }] } {

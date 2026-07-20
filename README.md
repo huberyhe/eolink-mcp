@@ -10,6 +10,8 @@ npx @huberyhe/eolink-mcp
 
 ## 提供的工具
 
+**查询（只读）**
+
 | 工具 | 用途 | project_id |
 | --- | --- | --- |
 | `eolink_list_projects` | 列出空间所有项目（第一步） | 不需要 |
@@ -18,6 +20,16 @@ npx @huberyhe/eolink-mcp
 | `eolink_find_api_by_path` | 按 api_path 精确/前缀查找接口 | 必填 |
 | `eolink_get_api_detail` | 按 api_id 获取单个接口的完整定义（请求/响应参数） | 必填 |
 | `eolink_export_openapi` | 导出整个项目为 OpenAPI JSON（兜底全量） | 必填 |
+
+**写入（会改动 Eolink 文档）**
+
+| 工具 | 用途 | project_id |
+| --- | --- | --- |
+| `eolink_create_api` | 新增 HTTP 接口（不传 api_id） | 必填 |
+| `eolink_update_api` | 修改已有接口（传 api_id） | 必填 |
+
+> ⚠️ 写工具默认启用，AI 可直接增改接口文档。修改建议先 `get_api_detail` 确认当前内容。Eolink Open API 不开放删除接口，删除请到 Eolink 后台手动操作。
+> 注：写操作经 `/index.php/` 入口调用；参数类型 `param_type` 用数字（0=string 3=int 2=json 8=boolean 等）。
 
 典型流程：`list_projects` → `search_apis` 或 `find_api_by_path`（带 project_id）→ `get_api_detail`。
 
