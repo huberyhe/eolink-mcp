@@ -38,21 +38,21 @@ function isRetryable(error: unknown): boolean {
 
 /**
  * 发起一次 Eolink Open API 调用。
- * @param path        接口路径，如 "v2/api_studio/management/api/search"
- * @param projectId   项目 ID（除 project/search 外都必传）
- * @param extra       额外的 Body 字段（与 space_id/project_id 合并）
- * @param noProject   某些接口（如 project/search）不需要 project_id，置 true 跳过
- * @param write       写操作（create/update）置 true：URL 加 /index.php/ 前缀
- * @param form        置 true 使用 form-urlencoded 格式（add_group 等特殊接口需要，大多数用 JSON）
+ * @param path      接口路径，如 "v2/api_studio/management/api/search"
+ * @param projectId 项目 ID（除 project/search 外都必传）
+ * @param opts      可选配置
  */
 export async function eolinkRequest<T = unknown>(
   path: string,
   projectId: string | undefined,
-  extra: Record<string, unknown> = {},
-  noProject = false,
-  write = false,
-  form = false
+  opts: {
+    extra?: Record<string, unknown>;
+    noProject?: boolean;
+    write?: boolean;
+    form?: boolean;
+  } = {}
 ): Promise<T> {
+  const { extra = {}, noProject = false, write = false, form = false } = opts;
   const cleanPath = path.replace(/^\//, "");
   // 写操作需要 /index.php/ 前缀，读操作直接 /path
   const prefix = write ? "index.php/" : "";
@@ -71,12 +71,14 @@ export async function eolinkRequest<T = unknown>(
     ? { host: proxy.host, port: proxy.port, protocol: "http" }
     : false;
 
-  // form 模式：将 body 编码为 URL-encoded 字符串
+  // form 模式：用 URLSearchParams 编码（比手动 encodeURIComponent 更标准）
   const contentType = form ? "application/x-www-form-urlencoded" : "application/json";
   const sendData = form
-    ? Object.entries(body)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-        .join("&")
+    ? new URLSearchParams(
+        Object.fromEntries(
+          Object.entries(body).map(([k, v]) => [k, String(v)])
+        )
+      ).toString()
     : body;
 
   let lastError: unknown;

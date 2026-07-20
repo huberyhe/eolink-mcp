@@ -57,7 +57,7 @@ server.registerTool(
     const resp = await eolinkRequest<{
       status: string;
       result?: Array<Record<string, unknown>>;
-    }>("v2/api_studio/management/project/search", undefined, {}, true);
+    }>("v2/api_studio/management/project/search", undefined, { noProject: true });
     if (!isOk(resp)) {
       return errText("列出项目失败", resp);
     }
@@ -177,7 +177,7 @@ server.registerTool(
     const resp = await eolinkRequest<{
       status: string;
       result?: Array<Record<string, unknown>>;
-    }>("v2/api_studio/management/api/search", params.project_id, body);
+    }>("v2/api_studio/management/api/search", params.project_id, { extra: body });
     if (!isOk(resp)) {
       return errText("搜索接口失败", resp);
     }
@@ -246,7 +246,7 @@ server.registerTool(
     const resp = await eolinkRequest<{
       status: string;
       result?: Array<Record<string, unknown>>;
-    }>("v2/api_studio/management/api/search", params.project_id, {});
+    }>("v2/api_studio/management/api/search", params.project_id, { extra: {} });
     if (!isOk(resp)) {
       return errText("按路径查找接口失败（拉取全量接口失败）", resp);
     }
@@ -305,9 +305,9 @@ server.registerTool(
     const resp = await eolinkRequest<{
       status: string;
       api_info?: Record<string, unknown>;
-    }>("v2/api_studio/management/api/api_info", params.project_id, {
+    }>("v2/api_studio/management/api/api_info", params.project_id, { extra: {
       api_id: params.api_id,
-    });
+    } });
     if (!isOk(resp) || !resp.api_info) {
       return errText("获取接口详情失败", resp);
     }
@@ -362,7 +362,7 @@ server.registerTool(
     const resp = await eolinkRequest<Record<string, unknown>>(
       "v2/api_studio/management/api/export",
       params.project_id,
-      body
+      { extra: body }
     );
     const text = JSON.stringify(resp, null, 2);
     const truncated = text.length > CHARACTER_LIMIT;
@@ -489,9 +489,7 @@ server.registerTool(
     const resp = await eolinkRequest<{ status: string; data?: Record<string, unknown> }>(
       "v2/api_studio/management/api/create_or_update_http_api",
       params.project_id,
-      body,
-      false,
-      true
+      { extra: body, write: true }
     );
     if (!isOk(resp)) {
       return errText("新增接口失败", resp);
@@ -552,9 +550,7 @@ server.registerTool(
     const resp = await eolinkRequest<{ status: string; data?: Record<string, unknown> }>(
       "v2/api_studio/management/api/create_or_update_http_api",
       params.project_id,
-      body,
-      false,
-      true
+      { extra: body, write: true }
     );
     if (!isOk(resp)) {
       return errText("修改接口失败", resp);
@@ -614,10 +610,7 @@ server.registerTool(
     const resp = await eolinkRequest<{ status: string; data?: number }>(
       "v2/api_studio/management/api/add_group",
       params.project_id,
-      { group_name: params.group_name, parent_group_id: params.parent_group_id },
-      false,
-      false,
-      true // form-urlencoded
+      { extra: { group_name: params.group_name, parent_group_id: params.parent_group_id }, form: true }
     );
     if (!isOk(resp)) {
       return errText("新增分组失败", resp);

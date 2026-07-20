@@ -28,8 +28,7 @@ npx @huberyhe/eolink-mcp
 | `eolink_create_api` | 新增 HTTP 接口（不传 api_id） | 必填 |
 | `eolink_update_api` | 修改已有接口（传 api_id） | 必填 |
 
-> ⚠️ 写工具默认启用，AI 可直接增改接口文档。修改建议先 `get_api_detail` 确认当前内容。Eolink Open API 不开放删除接口，删除请到 Eolink 后台手动操作。
-> 注：写操作经 `/index.php/` 入口调用；参数类型 `param_type` 用数字（0=string 3=int 2=json 8=boolean 等）。
+> ⚠️ 写工具默认启用，AI 可直接增改接口文档。修改建议先 `get_api_detail` 确认当前内容。Eolink Open API 不开放删除接口，删除请到 Eolink 后台手动操作。写操作经 `/index.php/` 入口，`add_group` 使用 form-urlencoded 格式——这些差异已内置处理，使用者无需关心。参数类型 `param_type` 用数字（0=string 3=int 2=json 8=boolean 等）。
 
 典型流程：`list_projects` → `search_apis` 或 `find_api_by_path`（带 project_id）→ `get_api_detail`。
 
