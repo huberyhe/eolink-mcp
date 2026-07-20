@@ -5,8 +5,12 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants (Claude
 ## 安装
 
 ```bash
-npx @huberyhe/eolink-mcp
+npm install -g @huberyhe/eolink-mcp     # 推荐：全局安装，多实例无竞态
+# 或
+npx @huberyhe/eolink-mcp                # 免安装直接运行（首次需下载）
 ```
+
+> 多个 Claude Code 实例同时冷启动时，npx 共用缓存可能偶现竞态导致 `not found`。全局安装可完全避免。
 
 ## 提供的工具
 
@@ -27,6 +31,7 @@ npx @huberyhe/eolink-mcp
 | --- | --- | --- |
 | `eolink_create_api` | 新增 HTTP 接口（不传 api_id） | 必填 |
 | `eolink_update_api` | 修改已有接口（传 api_id） | 必填 |
+| `eolink_create_group` | 新增接口分组 | 必填 |
 
 > ⚠️ 写工具默认启用，AI 可直接增改接口文档。修改建议先 `get_api_detail` 确认当前内容。Eolink Open API 不开放删除接口，删除请到 Eolink 后台手动操作。写操作经 `/index.php/` 入口，`add_group` 使用 form-urlencoded 格式——这些差异已内置处理，使用者无需关心。参数类型 `param_type` 用数字（0=string 3=int 2=json 8=boolean 等）。
 
@@ -45,14 +50,20 @@ npx @huberyhe/eolink-mcp
 
 ### Claude Code
 
-在 `~/.claude.json` 的 `mcpServers` 中添加：
+**方式一：全局 bin（推荐，多实例安全）**
+
+```bash
+npm install -g @huberyhe/eolink-mcp@1.1.0
+```
+
+然后在 `~/.claude.json` 的 `mcpServers` 中添加：
 
 ```json
 {
   "mcpServers": {
     "eolink": {
-      "command": "npx",
-      "args": ["-y", "@huberyhe/eolink-mcp"],
+      "command": "eolink-mcp",
+      "args": [],
       "env": {
         "EOLINK_BASE_URL": "https://your-eolink.example.com",
         "EOLINK_TOKEN": "your-open-api-secret-key",
@@ -63,11 +74,34 @@ npx @huberyhe/eolink-mcp
 }
 ```
 
-或用 CLI：`claude mcp add eolink -s user -e EOLINK_BASE_URL=... -e EOLINK_TOKEN=... -e EOLINK_SPACE_ID=... -- npx -y @huberyhe/eolink-mcp`，用 `claude mcp list` 查看连接状态。
+**方式二：npx（免安装）**
+
+```json
+{
+  "mcpServers": {
+    "eolink": {
+      "command": "npx",
+      "args": ["-y", "@huberyhe/eolink-mcp"],
+      "env": { ... }
+    }
+  }
+}
+```
+
+> npx 首次需下载，多实例冷启动偶现缓存竞态。长期使用推荐全局安装。
+
+**本地调试**：可在配置中保留两条入口，正式用全局 bin，改代码后用 dist 直连：
+
+```json
+"eolink":      { "command": "eolink-mcp" },           // 日常
+"eolink_test": { "command": "node", "args": ["dist/index.js"] }  // 调试
+```
+
+用 `claude mcp list` 查看连接状态。
 
 ### 其它 MCP 客户端
 
-任何支持 stdio MCP server 的客户端都适用：command 为 `npx`，args 为 `["-y", "@huberyhe/eolink-mcp"]`，env 同上。
+任何支持 stdio MCP server 的客户端都适用：command 为 `eolink-mcp`（全局安装）或 `npx -y @huberyhe/eolink-mcp`（免安装），env 同上。
 
 ## 获取凭证
 
@@ -81,7 +115,14 @@ npx @huberyhe/eolink-mcp
 
 ```bash
 git clone https://github.com/huberyhe/eolink-mcp.git && cd eolink-mcp
-npm install && npm run build
+npm install && npm run build    # 产物在 dist/index.js
+```
+
+改代码后 `npm run build`，重启 MCP 即生效。可在 `~/.claude.json` 中保留两条入口：
+
+```json
+"eolink":      { "command": "eolink-mcp" },              // 正式，走 npm
+"eolink_test": { "command": "node", "args": ["dist/index.js"] }  // 调试，改代码即生效
 ```
 
 测试用 MCP Inspector：
