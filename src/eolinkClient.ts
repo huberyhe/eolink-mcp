@@ -43,14 +43,15 @@ function isRetryable(error: unknown): boolean {
  * @param extra       额外的 Body 字段（与 space_id/project_id 合并）
  * @param noProject   某些接口（如 project/search）不需要 project_id，置 true 跳过
  * @param write       写操作（create/update）置 true：URL 加 /index.php/ 前缀
- *                    （Eolink 写接口必须经 index.php 入口，读接口不需要）
+ * @param form        置 true 使用 form-urlencoded 格式（add_group 等特殊接口需要，大多数用 JSON）
  */
 export async function eolinkRequest<T = unknown>(
   path: string,
   projectId: string | undefined,
   extra: Record<string, unknown> = {},
   noProject = false,
-  write = false
+  write = false,
+  form = false
 ): Promise<T> {
   const cleanPath = path.replace(/^\//, "");
   // 写操作需要 /index.php/ 前缀，读操作直接 /path
@@ -70,16 +71,24 @@ export async function eolinkRequest<T = unknown>(
     ? { host: proxy.host, port: proxy.port, protocol: "http" }
     : false;
 
+  // form 模式：将 body 编码为 URL-encoded 字符串
+  const contentType = form ? "application/x-www-form-urlencoded" : "application/json";
+  const sendData = form
+    ? Object.entries(body)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .join("&")
+    : body;
+
   let lastError: unknown;
   for (let attempt = 0; attempt <= RETRY_TIMES; attempt++) {
     try {
       const resp = await axios.request<T>({
         method: "POST",
         url,
-        data: body,
+        data: sendData,
         timeout: REQUEST_TIMEOUT,
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": contentType,
           Accept: "application/json",
           "Eo-Secret-Key": EO_SECRET_KEY,
         },

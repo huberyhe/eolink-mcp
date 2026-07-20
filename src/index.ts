@@ -572,6 +572,72 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// 工具 9：新增分组
+// ---------------------------------------------------------------------------
+const CreateGroupSchema = z
+  .object({
+    project_id: projectIdRequired,
+    group_name: z.string().min(1).describe("分组名称"),
+    parent_group_id: z
+      .number()
+      .int()
+      .default(0)
+      .describe(
+        "父级分组 ID，默认 0 表示顶级分组。传具体 group_id 则创建为子分组"
+      ),
+  })
+  .strict();
+
+server.registerTool(
+  "eolink_create_group",
+  {
+    title: "新增 Eolink 接口分组",
+    description: `在指定项目里新增一个 API 文档分组。
+
+注意：add_group 接口不支持 JSON，使用 form-urlencoded 格式（已内置处理）。
+
+参数：
+  - project_id：项目 ID（必填）
+  - group_name：分组名称（必填）
+  - parent_group_id：父分组 ID（可选，默认 0=顶级分组）
+
+返回新创建的分组 group_id。用 eolink_list_groups 验证分组是否出现在树上。`,
+    inputSchema: CreateGroupSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async (params) => {
+    const resp = await eolinkRequest<{ status: string; data?: number }>(
+      "v2/api_studio/management/api/add_group",
+      params.project_id,
+      { group_name: params.group_name, parent_group_id: params.parent_group_id },
+      false,
+      false,
+      true // form-urlencoded
+    );
+    if (!isOk(resp)) {
+      return errText("新增分组失败", resp);
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ 已新增分组：${params.group_name}\n  group_id: ${resp.data ?? "(未返回)"}\n  父分组: ${params.parent_group_id === 0 ? "顶级" : params.parent_group_id}\n  项目: ${params.project_id}\n用 eolink_list_groups 查看分组树。`,
+        },
+      ],
+      structuredContent: {
+        group_id: resp.data,
+        group_name: params.group_name,
+      },
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
 // 渲染辅助函数
 // ---------------------------------------------------------------------------
 function errText(action: string, resp: unknown): { content: [{ type: "text"; text: string }] } {
