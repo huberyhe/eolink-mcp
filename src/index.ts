@@ -17,15 +17,33 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { assertConfig, CHARACTER_LIMIT } from "./constants.js";
-import { eolinkRequest, isOk } from "./eolinkClient.js";
+import {
+  API_BASE_URL,
+  assertConfig,
+  CHARACTER_LIMIT,
+  EO_SECRET_KEY,
+  maskSecret,
+  SPACE_ID,
+  VERIFY_ON_START,
+  VERIFY_TIMEOUT,
+  VERSION,
+} from "./constants.js";
+import { eolinkRequest, isOk, verifyCredentials } from "./eolinkClient.js";
 
 assertConfig();
 
-const server = new McpServer({
-  name: "eolink-mcp-server",
-  version: "1.2.0",
-});
+const server = new McpServer(
+  {
+    name: "eolink-mcp-server",
+    version: VERSION,
+  },
+  {
+    instructions:
+      "通过 Eolink Open API 查询/写入接口文档。project_id 需每次显式传入：" +
+      "先用 eolink_list_projects 选取。若任何 eolink_* 工具报错，先调用 eolink_health_check " +
+      "定位是配置问题（token/space_id/base_url）还是业务问题，再把结论告知用户。",
+  }
+);
 
 /** project_id 参数的 Zod 片段，所有需要项目的工具复用。必填。 */
 const projectIdRequired = z
@@ -71,7 +89,78 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// 工具 2：列出接口分组树
+// 工具 2：配置自检
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "eolink_health_check",
+  {
+    title: "Eolink 配置自检",
+    description: `检查本 MCP 的配置与连通性，排障时先跑这个。
+
+无需参数。逐项报告：
+  1. 三个环境变量是否就位（令牌只显示遮蔽后的形态，不回显明文）
+  2. EOLINK_BASE_URL 是否可达
+  3. EOLINK_TOKEN 是否有效
+  4. EOLINK_SPACE_ID 是否有效
+  5. 通过时附带返回该空间的项目数量
+
+任一项失败会明确说明该改哪个环境变量。遇到「鉴权失败」「接口调用失败」等报错时，
+先调用本工具定位是配置问题还是业务问题。`,
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  async () => {
+    const lines: string[] = ["# Eolink 配置自检", ""];
+    // 第 1 节只断言「已设置」，有效性由第 2 节的联网探针判定，
+    // 故用中性标记而非 ✅，避免与探针失败时的 ❌ 自相矛盾。
+    lines.push("## 1. 环境变量（已设置，有效性见第 2 节）");
+    lines.push(`- EOLINK_BASE_URL: \`${API_BASE_URL}\``);
+    lines.push(`- EOLINK_TOKEN: \`${maskSecret(EO_SECRET_KEY)}\``);
+    lines.push(`- EOLINK_SPACE_ID: \`${maskSecret(SPACE_ID)}\``);
+    lines.push("", "## 2. 连通性与鉴权（调用 project/search 探针）");
+
+    // 与启动自检共用同一探针，避免两处各写一遍
+    const r = await verifyCredentials();
+    if (r.ok) {
+      lines.push("- ✅ EOLINK_BASE_URL 可达");
+      lines.push("- ✅ EOLINK_TOKEN 有效");
+      lines.push(`- ✅ EOLINK_SPACE_ID 有效（该空间共 ${r.projectCount} 个项目）`);
+      lines.push(
+        "",
+        "配置全部正常。可以开始用 eolink_list_projects 选取项目，再搜索接口。"
+      );
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        structuredContent: {
+          ok: true,
+          base_url: API_BASE_URL,
+          token: maskSecret(EO_SECRET_KEY),
+          space_id: maskSecret(SPACE_ID),
+          project_count: r.projectCount,
+        },
+      };
+    }
+    // 错误信息已由 client 分类，带可操作提示（指向具体环境变量），直接透出
+    lines.push(`- ❌ ${r.error}`);
+    lines.push(
+      "",
+      "排障建议：确认 EOLINK_BASE_URL / EOLINK_TOKEN / EOLINK_SPACE_ID 与目标 Eolink 实例匹配；" +
+        "令牌需在『空间设置 / 开放 API』生成，且对目标空间有权限。"
+    );
+    return {
+      content: [{ type: "text" as const, text: lines.join("\n") }],
+      isError: true,
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// 工具 3：列出接口分组树
 // ---------------------------------------------------------------------------
 const ListGroupsSchema = z
   .object({
@@ -116,7 +205,7 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// 工具 3：搜索接口
+// 工具 4：搜索接口
 // ---------------------------------------------------------------------------
 const SearchApisSchema = z
   .object({
@@ -197,7 +286,7 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// 工具 4：按 URL 精确查找接口
+// 工具 5：按 URL 精确查找接口
 // ---------------------------------------------------------------------------
 const FindApiByPathSchema = z
   .object({
@@ -255,7 +344,12 @@ server.registerTool(
       const p = String(it.api_path ?? "").replace(/^\/+|\/+$/g, "");
       return params.match_mode === "prefix" ? p.startsWith(target) : p === target;
     });
-    const text = renderApiList(matched, matched.length, 100);
+    // prefix 模式配短前缀可能匹配上千条，必须套字符上限，否则撑爆上下文。
+    const { text, truncated } = truncateText(
+      renderApiList(matched, matched.length, matched.length),
+      CHARACTER_LIMIT,
+      `匹配 ${matched.length} 条，已按 ${CHARACTER_LIMIT} 字符截断。请用更精确的 api_path 或 match_mode=exact 缩小范围。`
+    );
     return {
       content: [{ type: "text", text }],
       structuredContent: {
@@ -263,14 +357,15 @@ server.registerTool(
         match_mode: params.match_mode,
         total_scanned: all.length,
         count: matched.length,
-        items: matched,
+        truncated,
+        items: truncated ? undefined : matched,
       },
     };
   }
 );
 
 // ---------------------------------------------------------------------------
-// 工具 5：获取接口详情
+// 工具 6：获取接口详情
 // ---------------------------------------------------------------------------
 const ApiDetailSchema = z
   .object({
@@ -311,21 +406,22 @@ server.registerTool(
     if (!isOk(resp) || !resp.api_info) {
       return errText("获取接口详情失败", resp);
     }
-    const text = renderApiDetail(resp.api_info);
-    const truncated = text.length > CHARACTER_LIMIT;
-    const finalText = truncated
-      ? text.slice(0, CHARACTER_LIMIT) +
-        `\n\n[响应超过 ${CHARACTER_LIMIT} 字符，已截断。如需完整数据请用 JSON 格式或缩小查询范围。]`
-      : text;
+    const { text, truncated } = truncateText(
+      renderApiDetail(resp.api_info),
+      CHARACTER_LIMIT,
+      `响应超过 ${CHARACTER_LIMIT} 字符，已截断。如需完整数据请用 JSON 格式或缩小查询范围。`
+    );
     return {
-      content: [{ type: "text", text: finalText }],
-      structuredContent: { api_id: params.api_id, truncated, api_info: resp.api_info },
+      content: [{ type: "text", text }],
+      // 截断时不回传全量 api_info——否则「文本已截断」的声明失去意义，
+      // 结构化字段仍会带着全量数据经 stdio 传输。
+      structuredContent: { api_id: params.api_id, truncated, api_info: truncated ? undefined : resp.api_info },
     };
   }
 );
 
 // ---------------------------------------------------------------------------
-// 工具 6：导出全量 OpenAPI（兜底）
+// 工具 7：导出全量 OpenAPI（兜底）
 // ---------------------------------------------------------------------------
 const ExportSchema = z
   .object({
@@ -364,21 +460,21 @@ server.registerTool(
       params.project_id,
       { extra: body }
     );
-    const text = JSON.stringify(resp, null, 2);
-    const truncated = text.length > CHARACTER_LIMIT;
-    const finalText = truncated
-      ? text.slice(0, CHARACTER_LIMIT) +
-        `\n\n[已截断，完整文档请缩小 group_ids 范围或改用单接口查询]`
-      : text;
+    const { text, truncated } = truncateText(
+      JSON.stringify(resp, null, 2),
+      CHARACTER_LIMIT,
+      "已截断，完整文档请缩小 group_ids 范围或改用单接口查询"
+    );
     return {
-      content: [{ type: "text", text: finalText }],
-      structuredContent: { truncated, data: resp },
+      content: [{ type: "text", text }],
+      // 同 get_api_detail：截断时不再回传全量 data
+      structuredContent: { truncated, data: truncated ? undefined : resp },
     };
   }
 );
 
 // ---------------------------------------------------------------------------
-// 工具 7 & 8：新增 / 修改接口（共用 schema，差异在 api_id 是否必填）
+// 工具 8 & 9：新增 / 修改接口（共用 schema，差异在 api_id 是否必填）
 // ---------------------------------------------------------------------------
 
 /** 单个参数的 Zod 片段（query/body/restful 通用） */
@@ -447,7 +543,7 @@ function buildWriteBody(params: Record<string, unknown>): Record<string, unknown
   return body;
 }
 
-// ---- 工具 7：新增接口 ----
+// ---- 工具 8：新增接口 ----
 const CreateApiSchema = z
   .object({ project_id: projectIdRequired, ...ApiWriteFields })
   .strict();
@@ -507,7 +603,7 @@ server.registerTool(
   }
 );
 
-// ---- 工具 8：修改接口 ----
+// ---- 工具 9：修改接口 ----
 const UpdateApiSchema = z
   .object({
     project_id: projectIdRequired,
@@ -568,7 +664,7 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// 工具 9：新增分组
+// 工具 10：新增分组
 // ---------------------------------------------------------------------------
 const CreateGroupSchema = z
   .object({
@@ -633,11 +729,34 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 // 渲染辅助函数
 // ---------------------------------------------------------------------------
-function errText(action: string, resp: unknown): { content: [{ type: "text"; text: string }] } {
+/**
+ * 按字符上限安全截断。
+ * 直接在 CHARACTER_LIMIT 处 slice 可能劈开 UTF-16 代理对（emoji、生僻字），
+ * 产出孤立代理项，部分客户端会解析成 U+FFFD 或报错。若切点落在高代理项后，回退一格。
+ */
+function truncateText(
+  text: string,
+  limit: number,
+  note: string
+): { text: string; truncated: boolean } {
+  if (text.length <= limit) return { text, truncated: false };
+  let cut = limit;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return { text: `${text.slice(0, cut)}\n\n[${note}]`, truncated: true };
+}
+
+function errText(
+  action: string,
+  resp: unknown
+): { content: [{ type: "text"; text: string }]; isError: true } {
   return {
     content: [
       { type: "text", text: `${action}。Eolink 返回：${JSON.stringify(resp).slice(0, 500)}` },
     ],
+    // 补 isError 语义：否则业务失败对客户端只是「普通文本」，不触发错误处理。
+    // 多数失败已在 eolinkClient 抛异常，这里是兜底。
+    isError: true,
   };
 }
 
@@ -768,9 +887,23 @@ function renderParamSection(
 // 启动
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
+  // 可选的启动自检：联网确认 token / space_id 真的有效。
+  // 必须在 server.connect 之前——连上后再 exit(1) 会让客户端看到一个
+  // 已连接却又消失的 server，反而更难诊断。
+  if (VERIFY_ON_START) {
+    const r = await verifyCredentials({ timeout: VERIFY_TIMEOUT });
+    if (!r.ok) {
+      console.error(
+        `ERROR: eolink-mcp 启动自检失败，凭据不可用（EOLINK_VERIFY_ON_START=1 已开启）：${r.error}`
+      );
+      process.exit(1);
+    }
+    console.error(`eolink-mcp 启动自检通过：凭据有效，可见 ${r.projectCount} 个项目`);
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("eolink-mcp-server v1.2.0 running via stdio");
+  console.error(`eolink-mcp-server v${VERSION} running via stdio`);
 }
 
 main().catch((error) => {

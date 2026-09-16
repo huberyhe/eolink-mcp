@@ -18,6 +18,7 @@ npx @huberyhe/eolink-mcp                # 免安装直接运行（首次需下�
 
 | 工具 | 用途 | project_id |
 | --- | --- | --- |
+| `eolink_health_check` | 配置自检：环境变量/连通性/鉴权逐项体检（排障第一步） | 不需要 |
 | `eolink_list_projects` | 列出空间所有项目（第一步） | 不需要 |
 | `eolink_list_groups` | 列出指定项目的接口分组树 | 必填 |
 | `eolink_search_apis` | 按关键字/分组/状态模糊搜索接口（匹配名称/URL/Tag） | 必填 |
@@ -47,13 +48,34 @@ npx @huberyhe/eolink-mcp                # 免安装直接运行（首次需下�
 | `EOLINK_TOKEN` | 是 | Open API 令牌（对应请求头 `Eo-Secret-Key`） |
 | `EOLINK_SPACE_ID` | 是 | 工作空间 ID |
 | `EOLINK_NO_PROXY` | 否 | 设 `1` 禁用代理解析（默认自动读 `HTTP(S)_PROXY`） |
+| `EOLINK_VERIFY_ON_START` | 否 | 设 `1` 在启动时联网校验凭据有效性（见下） |
+
+### 启动时的配置校验
+
+分两层，边界是「能否在本地判定」：
+
+**本地校验（始终生效）**：三个变量缺失、或 `EOLINK_BASE_URL` 不是合法 `http(s)://` 地址时，
+启动即打印明确错误并 `exit(1)`；`EOLINK_TOKEN` 短于 16 字符时打告警但不退出。
+
+**联网校验（默认关闭）**：`EOLINK_TOKEN` 格式合法但实际无效（如填错、已过期）时，
+本地无从判断，默认要等到调用工具才报错。设 `EOLINK_VERIFY_ON_START=1` 可改为启动时
+用一次 `project/search` 探测（5 秒超时、不重试），凭据无效则立即 `exit(1)`：
+
+```json
+"env": { "...": "...", "EOLINK_VERIFY_ON_START": "1" }
+```
+
+> 默认关闭是因为启动时联网探测会拖慢启动，且内网不通/代理未就绪/Eolink 抖动时会把
+> 「临时不可达」误判成「配置错误」而拒绝启动。需要「配置错了就当场失败」时再开启。
+
+无论是否开启，任何时候都可用 `eolink_health_check` 按需体检。
 
 ### Claude Code
 
 **方式一：全局 bin（推荐，多实例安全）**
 
 ```bash
-npm install -g @huberyhe/eolink-mcp@1.1.0
+npm install -g @huberyhe/eolink-mcp@1.1.1
 ```
 
 然后在 `~/.claude.json` 的 `mcpServers` 中添加：
@@ -110,6 +132,23 @@ npm install -g @huberyhe/eolink-mcp@1.1.0
 ## 代理
 
 访问 Eolink 实例（尤其私有化内网部署）常需经代理。本 server 自动读取 `HTTP(S)_PROXY` 环境变量；设 `EOLINK_NO_PROXY=1` 可禁用。
+
+## 排障
+
+**遇到任何 `eolink_*` 工具报错，先调用 `eolink_health_check`** —— 它会逐项报告环境变量、连通性、鉴权状态，并明确指出该改哪个变量。令牌只显示遮蔽后的形态（如 `8SnX…75d7`），不会回显明文。
+
+常见故障与对策：
+
+| 现象 | 原因 | 对策 |
+| --- | --- | --- |
+| `Eolink 鉴权失败`（code 200007） | `EOLINK_TOKEN` 无效或未传；或复制时带了空格/换行 | 到后台「空间设置 / 开放 API」重新生成；本 server 已自动 trim 首尾空白 |
+| `Eolink 项目校验失败`（code 200301） | `project_id` 无效或不属于该空间 | 先用 `eolink_list_projects` 取正确 ID |
+| 启动即失败、`claude mcp list` 显示连接断开 | 缺少必需环境变量，或 `EOLINK_BASE_URL` 不是合法地址 | fail-fast 设计；用 `claude mcp list` 或 `--debug` 查看 stderr 里的具体缺项 |
+| `Eolink 域名无法解析` / `实例不可达` | base_url 写错、内网不通或代理未生效 | 核对 `EOLINK_BASE_URL`，确认 `HTTP(S)_PROXY` 正确 |
+| `响应不是预期的 JSON` | `EOLINK_BASE_URL` 指到了网页根地址而非 Open API 根地址 | 填实例根地址即可（如 `https://your-eolink.example.com`），不要带 `/v2` 或末尾斜杠 |
+| `响应过大，超过 64MB 上限被中止` | 导出/搜索的响应体超过保护上限（实测单项目全量导出可达 12MB） | 缩小范围：`export_openapi` 传 `group_ids` 只导部分分组，或改用 `search_apis` + `get_api_detail` 按需取 |
+
+配置层面已内置的容错：`EOLINK_BASE_URL` 自动去尾随斜杠，`EOLINK_TOKEN` / `EOLINK_SPACE_ID` 自动 trim 首尾空白。
 
 ## 本地开发
 

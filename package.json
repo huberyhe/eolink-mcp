@@ -1,6 +1,6 @@
 {
   "name": "@huberyhe/eolink-mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server for Eolink Apikit Open API — query API docs from any Eolink instance (SaaS or private)",
   "type": "module",
   "main": "dist/index.js",
@@ -40,7 +40,7 @@
     "url": "https://github.com/huberyhe/eolink-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.6.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.7.9",
     "zod": "^3.23.8"
   },
