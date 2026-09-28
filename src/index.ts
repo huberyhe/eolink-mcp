@@ -12,7 +12,7 @@
  *   3. eolink_search_apis          传 project_id，搜接口拿 api_id
  *   4. eolink_get_api_detail       传 project_id + api_id，看完整定义
  *
- * 凭证从环境变量读取（见 constants.ts）。
+ * 配置项支持命令行参数与环境变量两种来源，命令行参数优先（见 constants.ts）。
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -21,6 +21,7 @@ import {
   API_BASE_URL,
   assertConfig,
   CHARACTER_LIMIT,
+  CONFIG_SOURCES,
   EO_SECRET_KEY,
   maskSecret,
   SPACE_ID,
@@ -41,7 +42,8 @@ const server = new McpServer(
     instructions:
       "通过 Eolink Open API 查询/写入接口文档。project_id 需每次显式传入：" +
       "先用 eolink_list_projects 选取。若任何 eolink_* 工具报错，先调用 eolink_health_check " +
-      "定位是配置问题（token/space_id/base_url）还是业务问题，再把结论告知用户。",
+      "定位是配置问题（base url / token / space id）还是业务问题，再把结论告知用户。" +
+      "配置可用命令行参数（--base-url / --token / --space-id）或环境变量提供，参数优先。",
   }
 );
 
@@ -98,13 +100,13 @@ server.registerTool(
     description: `检查本 MCP 的配置与连通性，排障时先跑这个。
 
 无需参数。逐项报告：
-  1. 三个环境变量是否就位（令牌只显示遮蔽后的形态，不回显明文）
-  2. EOLINK_BASE_URL 是否可达
-  3. EOLINK_TOKEN 是否有效
-  4. EOLINK_SPACE_ID 是否有效
+  1. 三个配置项是否就位，并标明各自来源（命令行参数 / 环境变量），令牌只显示遮蔽后的形态
+  2. base url 是否可达
+  3. token 是否有效
+  4. space id 是否有效
   5. 通过时附带返回该空间的项目数量
 
-任一项失败会明确说明该改哪个环境变量。遇到「鉴权失败」「接口调用失败」等报错时，
+任一项失败会明确说明该改哪个配置项。遇到「鉴权失败」「接口调用失败」等报错时，
 先调用本工具定位是配置问题还是业务问题。`,
     inputSchema: {},
     annotations: {
@@ -118,18 +120,23 @@ server.registerTool(
     const lines: string[] = ["# Eolink 配置自检", ""];
     // 第 1 节只断言「已设置」，有效性由第 2 节的联网探针判定，
     // 故用中性标记而非 ✅，避免与探针失败时的 ❌ 自相矛盾。
-    lines.push("## 1. 环境变量（已设置，有效性见第 2 节）");
-    lines.push(`- EOLINK_BASE_URL: \`${API_BASE_URL}\``);
-    lines.push(`- EOLINK_TOKEN: \`${maskSecret(EO_SECRET_KEY)}\``);
-    lines.push(`- EOLINK_SPACE_ID: \`${maskSecret(SPACE_ID)}\``);
+    // 标注来源：命令行参数优先于环境变量，配错时一眼能看出哪个来源生效。
+    lines.push("## 1. 配置项（已设置，有效性见第 2 节）");
+    lines.push(`- base url: \`${API_BASE_URL}\`（来源：${CONFIG_SOURCES.EOLINK_BASE_URL}）`);
+    lines.push(
+      `- token: \`${maskSecret(EO_SECRET_KEY)}\`（来源：${CONFIG_SOURCES.EOLINK_TOKEN}）`
+    );
+    lines.push(
+      `- space id: \`${maskSecret(SPACE_ID)}\`（来源：${CONFIG_SOURCES.EOLINK_SPACE_ID}）`
+    );
     lines.push("", "## 2. 连通性与鉴权（调用 project/search 探针）");
 
     // 与启动自检共用同一探针，避免两处各写一遍
     const r = await verifyCredentials();
     if (r.ok) {
-      lines.push("- ✅ EOLINK_BASE_URL 可达");
-      lines.push("- ✅ EOLINK_TOKEN 有效");
-      lines.push(`- ✅ EOLINK_SPACE_ID 有效（该空间共 ${r.projectCount} 个项目）`);
+      lines.push("- ✅ base url 可达");
+      lines.push("- ✅ token 有效");
+      lines.push(`- ✅ space id 有效（该空间共 ${r.projectCount} 个项目）`);
       lines.push(
         "",
         "配置全部正常。可以开始用 eolink_list_projects 选取项目，再搜索接口。"
@@ -149,8 +156,9 @@ server.registerTool(
     lines.push(`- ❌ ${r.error}`);
     lines.push(
       "",
-      "排障建议：确认 EOLINK_BASE_URL / EOLINK_TOKEN / EOLINK_SPACE_ID 与目标 Eolink 实例匹配；" +
-        "令牌需在『空间设置 / 开放 API』生成，且对目标空间有权限。"
+      "排障建议：确认 base url / token / space id 与目标 Eolink 实例匹配；" +
+        "令牌需在『空间设置 / 开放 API』生成，且对目标空间有权限。" +
+        "注意命令行参数优先于环境变量，若两处都配了以参数为准。"
     );
     return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -894,7 +902,7 @@ async function main(): Promise<void> {
     const r = await verifyCredentials({ timeout: VERIFY_TIMEOUT });
     if (!r.ok) {
       console.error(
-        `ERROR: eolink-mcp 启动自检失败，凭据不可用（EOLINK_VERIFY_ON_START=1 已开启）：${r.error}`
+        `ERROR: eolink-mcp 启动自检失败，凭据不可用（由 --verify-on-start 或 EOLINK_VERIFY_ON_START=1 开启）：${r.error}`
       );
       process.exit(1);
     }

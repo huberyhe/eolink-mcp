@@ -90,9 +90,9 @@ function classifyEolinkError(
   // 鉴权失败：实测 code 200007，error_info 指向 Eo-Secret-Key
   if (code === "200007" || /Eo-Secret-Key/i.test(info)) {
     return new EolinkError(
-      `Eolink 鉴权失败：EOLINK_TOKEN 无效或未传。` +
+      `Eolink 鉴权失败：token 无效或未传。` +
         `请到 Eolink 后台『空间设置 / 开放 API』重新生成令牌，` +
-        `确认 MCP 配置里的 EOLINK_TOKEN 与该空间匹配、且没有多余空格或换行。${detail}`,
+        `确认配置里的 --token 参数或 EOLINK_TOKEN 环境变量与该空间匹配、且没有多余空格或换行。${detail}`,
       "auth",
       code
     );
@@ -100,7 +100,7 @@ function classifyEolinkError(
   // 工作空间无效 / 无权限
   if (/space/i.test(info) || code === "200008") {
     return new EolinkError(
-      `Eolink 空间校验失败：请确认 EOLINK_SPACE_ID 正确，且该令牌对该空间有访问权限。${detail}`,
+      `Eolink 空间校验失败：请确认 --space-id 参数或 EOLINK_SPACE_ID 环境变量正确，且该令牌对该空间有访问权限。${detail}`,
       "space",
       code
     );
@@ -233,7 +233,7 @@ export async function eolinkRequest<T = unknown>(
  *   网关页，或响应根本不是 JSON。
  *
  * 所以这里对字符串再尝试一次 parse（防御性，正常不会走到），
- * 失败才判定为响应异常，提示核对 EOLINK_BASE_URL。
+ * 失败才判定为响应异常，提示核对 base url。
  */
 function normalizeResponse(raw: unknown, httpStatus: number, path: string): unknown {
   if (raw !== null && typeof raw === "object") return raw;
@@ -247,8 +247,9 @@ function normalizeResponse(raw: unknown, httpStatus: number, path: string): unkn
   } catch {
     throw new EolinkError(
       `Eolink 响应不是预期的 JSON（HTTP ${httpStatus}）：` +
-        `请确认 EOLINK_BASE_URL 指向 Open API 根地址（如 https://your-eolink.example.com，` +
-        `不要带 /v2 路径或末尾斜杠）。path=${path} 响应片段=${text.slice(0, 120)}`,
+        `请确认 base url（--base-url 或 EOLINK_BASE_URL）指向 Open API 根地址` +
+        `（如 https://your-eolink.example.com，不要带 /v2 路径或末尾斜杠）。` +
+        `path=${path} 响应片段=${text.slice(0, 120)}`,
       "network"
     );
   }
@@ -261,11 +262,11 @@ function formatAxiosError(error: unknown, path: string): string {
       const { status, data } = error.response;
       const body = typeof data === "string" ? data : JSON.stringify(data);
       if (status === 401 || status === 403) {
-        return `Eolink 鉴权失败 (HTTP ${status})：请检查 EOLINK_TOKEN 是否正确、是否对该空间/项目有读权限。path=${path} body=${body.slice(0, 200)}`;
+        return `Eolink 鉴权失败 (HTTP ${status})：请检查 token（--token 或 EOLINK_TOKEN）是否正确、是否对该空间/项目有读权限。path=${path} body=${body.slice(0, 200)}`;
       }
       // 返回 HTML 通常意味着 base_url 指到了网页地址而非 Open API 根地址
       if (/^\s*<(!doctype|html)/i.test(body)) {
-        return `Eolink 返回了 HTML 而非 JSON (HTTP ${status})：请确认 EOLINK_BASE_URL 指向 Open API 根地址（如 https://your-eolink.example.com），不要带 /v2 路径或末尾斜杠。path=${path}`;
+        return `Eolink 返回了 HTML 而非 JSON (HTTP ${status})：请确认 base url（--base-url 或 EOLINK_BASE_URL）指向 Open API 根地址（如 https://your-eolink.example.com），不要带 /v2 路径或末尾斜杠。path=${path}`;
       }
       return `Eolink 接口调用失败 (HTTP ${status})：path=${path} body=${body.slice(0, 200)}`;
     }
@@ -273,15 +274,15 @@ function formatAxiosError(error: unknown, path: string): string {
       return `Eolink 请求超时：path=${path}（实例可能不可达，确认内网连通；若全空间搜索请缩小范围）`;
     }
     if (error.code === "ENOTFOUND") {
-      return `Eolink 域名无法解析 (ENOTFOUND)：确认 EOLINK_BASE_URL 的域名正确、DNS 可用（当前值已脱敏，请核对配置）。`;
+      return `Eolink 域名无法解析 (ENOTFOUND)：确认 base url（--base-url 或 EOLINK_BASE_URL）的域名正确、DNS 可用（当前值已脱敏，请核对配置）。`;
     }
     if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
-      return `Eolink 实例不可达 (${error.code})：确认 EOLINK_BASE_URL 正确、内网可访问，且代理（${process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "未设置"}）可用。`;
+      return `Eolink 实例不可达 (${error.code})：确认 base url（--base-url 或 EOLINK_BASE_URL）正确、内网可访问，且代理（${process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "未设置"}）可用。`;
     }
     // ECONNRESET / TLS 握手失败：域名解析不到、端口不通、或代理/网关中断了连接
     if (error.code === "ECONNRESET" || error.code === "EPROTO" || error.code === "ERR_SSL_WRONG_VERSION_NUMBER") {
       return `Eolink 连接被中断 (${error.code})：通常是域名不存在、端口不通，或代理/网关拒绝连接。` +
-        `请确认 EOLINK_BASE_URL 正确、内网可达，代理（${process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "未设置"}）可用。`;
+        `请确认 base url（--base-url 或 EOLINK_BASE_URL）正确、内网可达，代理（${process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "未设置"}）可用。`;
     }
     // axios 在响应体超过 maxContentLength 时也抛 ERR_BAD_RESPONSE（且不带 response），
     // 必须与「真返回了非 JSON」区分，否则会把「响应过大」误导成「base_url 配错」。
@@ -293,7 +294,7 @@ function formatAxiosError(error: unknown, path: string): string {
     }
     // 其余 ERR_BAD_RESPONSE：响应不是可解析的 JSON
     if (error.code === "ERR_BAD_RESPONSE") {
-      return `Eolink 响应不是预期 JSON：检查 EOLINK_BASE_URL 是否指向 Open API 根地址（如 https://your-eolink.example.com，不要带 /v2 或末尾斜杠）。path=${path}`;
+      return `Eolink 响应不是预期 JSON：检查 base url（--base-url 或 EOLINK_BASE_URL）是否指向 Open API 根地址（如 https://your-eolink.example.com，不要带 /v2 或末尾斜杠）。path=${path}`;
     }
   }
   return `Eolink 调用未知错误：path=${path} ${error instanceof Error ? error.message : String(error)}`;
@@ -308,7 +309,7 @@ export function isOk(resp: { status?: string }): boolean {
  * 联网校验凭据有效性：调用最轻量的 project/search 探针。
  * 能返回即说明 base_url / token / space_id 三者全部有效。
  *
- * 启动自检（EOLINK_VERIFY_ON_START=1）与 eolink_health_check 共用本函数。
+ * 启动自检（--verify-on-start / EOLINK_VERIFY_ON_START=1）与 eolink_health_check 共用本函数。
  * 不抛异常，而是把结论放在返回值里，便于调用方决定如何呈现。
  */
 export async function verifyCredentials(opts: { timeout?: number } = {}): Promise<
